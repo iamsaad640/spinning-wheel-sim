@@ -1,69 +1,352 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Spinning Wheel Physics Simulation</title>
-    <meta http-equiv="refresh" content="0; url=wheel.html">
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #0f1115;
-            color: #eaeef7;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            margin: 0;
-            text-align: center;
-        }
-        .container {
-            max-width: 600px;
-            padding: 2rem;
-        }
-        h1 {
-            color: #ffffff;
-            margin-bottom: 1rem;
-        }
-        p {
-            color: #aab3c5;
-            line-height: 1.6;
-            margin-bottom: 1.5rem;
-        }
-        .btn {
-            display: inline-block;
-            background: #3a415a;
-            color: #ffffff;
-            padding: 12px 24px;
-            text-decoration: none;
-            border-radius: 6px;
-            transition: background 0.2s;
-        }
-        .btn:hover {
-            background: #4a526a;
-        }
-        .loading {
-            color: #4a526a;
-            font-size: 0.9rem;
-            margin-top: 2rem;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spinning Wheel with Ball</title>
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #0f1115;
+      color: #eaeef7;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, Helvetica, "Apple Color Emoji", "Segoe UI Emoji";
+    }
+    .container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+    }
+    canvas {
+      width: min(92vmin, 1200px);
+      height: min(92vmin, 1200px);
+      display: block;
+      border-radius: 12px;
+      background: radial-gradient(1200px 1200px at center, #141824 0%, #0f1115 70%);
+      box-shadow: 0 10px 40px rgba(0,0,0,0.5), inset 0 0 60px rgba(0,0,0,0.4);
+      cursor: pointer;
+    }
+    .hint {
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: 14px;
+      font-size: 14px;
+      color: #aab3c5;
+      user-select: none;
+      opacity: 0.9;
+    }
+  </style>
+  <meta name="description" content="Spinning wheel with a ball inside. Includes gravity downward, inward (radial) damping and wall friction. Click to spin." />
+  <meta name="theme-color" content="#0f1115" />
 </head>
 <body>
-    <div class="container">
-        <h1>🎡 Spinning Wheel Physics Simulation</h1>
-        <p>Redirecting you to the interactive simulation...</p>
-        <p>If you're not redirected automatically, click the button below:</p>
-        <a href="wheel.html" class="btn">Launch Simulation</a>
-        <div class="loading">Loading physics engine...</div>
-    </div>
-    
-    <script>
-        // Fallback redirect after 2 seconds
-        setTimeout(() => {
-            window.location.href = 'wheel.html';
-        }, 2000);
-    </script>
+  <div class="container">
+    <canvas id="wheelCanvas"></canvas>
+  </div>
+  <div class="hint">Click or tap to spin the wheel and ball</div>
+
+  <script>
+    // Configuration values collected for clarity
+    const CONFIG = {
+      pixelsPerMeter: 200,            // Render scale. Tweak for feel.
+      gravityMeters: 5.0,             // m/s^2 downward (screen +y)
+      airDragPerSecond: 0.10,         // Fractional velocity loss per second (air)
+      wallRestitution: 0.25,          // Bounciness on the rim (0..1)
+      // Friction model (Coulomb):
+      muStatic: 0.45,                 // Static friction coefficient
+      muKinetic: 0.35,                // Kinetic friction coefficient
+      inwardRadialAccel: 1.8,         // Extra inward acceleration (m/s^2) while in contact
+      wheelAngularFriction: 0.25,     // Fractional omega loss per second
+      ballAngularFriction: 2.0,       // Rotational damping for ball (1/s)
+      rimThicknessPx: 24,             // Visual thickness
+      ballRadiusPx: 10,               // Ball size
+      spokeCount: 36,                 // Decorative spokes
+      spinImpulseRange: [0.6, 1.2],   // small additive spin on tap
+      ballBoostSpeed: 2.2             // m/s along tangential when clicked
+    };
+
+    const canvas = document.getElementById('wheelCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Internal state
+    let devicePixelRatioValue = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    let centerX = 0;
+    let centerY = 0;
+    let wheelRadiusPx = 0;            // Inner radius where ball collides
+    let wheelAngle = 0;               // For rendering
+    let wheelOmega = 0.4;             // rad/s (slower default)
+
+    // Ball rotation state (for visible stripes)
+    let ballAngle = 0;                // radians
+    let ballOmega = 0;                // rad/s
+
+    const ball = {
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0
+    };
+
+    function resize() {
+      const cssSize = Math.min(window.innerWidth, window.innerHeight) * 0.92;
+      const cssWidth = cssSize;
+      const cssHeight = cssSize;
+
+      canvas.style.width = cssWidth + 'px';
+      canvas.style.height = cssHeight + 'px';
+      canvas.width = Math.floor(cssWidth * devicePixelRatioValue);
+      canvas.height = Math.floor(cssHeight * devicePixelRatioValue);
+
+      centerX = canvas.width * 0.5;
+      centerY = canvas.height * 0.5;
+
+      const visualRadius = Math.min(canvas.width, canvas.height) * 0.45;
+      // Inner rim radius (ball collides against this)
+      wheelRadiusPx = Math.max(40, visualRadius - CONFIG.rimThicknessPx);
+
+      placeBallNearRim();
+    }
+
+    function placeBallNearRim() {
+      const angle = Math.random() * Math.PI * 2;
+      const r = wheelRadiusPx - CONFIG.ballRadiusPx - 1;
+      const ux = Math.cos(angle);
+      const uy = Math.sin(angle);
+      ball.x = centerX + ux * r;
+      ball.y = centerY + uy * r;
+
+      const tangentialX = -uy;
+      const tangentialY = ux;
+      const boost = CONFIG.ballBoostSpeed * CONFIG.pixelsPerMeter;
+      ball.vx = tangentialX * boost;
+      ball.vy = tangentialY * boost;
+    }
+
+    function randomInRange(min, max) {
+      return min + Math.random() * (max - min);
+    }
+
+    canvas.addEventListener('click', () => {
+      // Add small spin; do not reset ball
+      wheelOmega += randomInRange(CONFIG.spinImpulseRange[0], CONFIG.spinImpulseRange[1]);
+    });
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      wheelOmega += randomInRange(CONFIG.spinImpulseRange[0], CONFIG.spinImpulseRange[1]);
+    }, { passive: false });
+
+    window.addEventListener('resize', resize);
+
+    let lastTimestamp = performance.now();
+
+    function step(now) {
+      const dtMs = Math.max(0, Math.min(32, now - lastTimestamp)); // Clamp for stability
+      lastTimestamp = now;
+      const dt = dtMs / 1000;
+
+      updatePhysics(dt);
+      draw();
+
+      requestAnimationFrame(step);
+    }
+
+    function updatePhysics(dt) {
+      // Gravity
+      const g = CONFIG.gravityMeters * CONFIG.pixelsPerMeter; // px/s^2
+      ball.vy += g * dt;
+
+      // Air drag
+      const airK = Math.max(0, 1 - CONFIG.airDragPerSecond * dt);
+      ball.vx *= airK;
+      ball.vy *= airK;
+
+      // Integrate
+      ball.x += ball.vx * dt;
+      ball.y += ball.vy * dt;
+
+      // Ball rotational damping
+      const ballSpinK = Math.max(0, 1 - CONFIG.ballAngularFriction * dt);
+      ballOmega *= ballSpinK;
+
+      // Wheel spin friction
+      const omegaK = Math.max(0, 1 - CONFIG.wheelAngularFriction * dt);
+      wheelOmega *= omegaK;
+      wheelAngle += wheelOmega * dt;
+
+      // Collision with inner rim (circle)
+      const dx = ball.x - centerX;
+      const dy = ball.y - centerY;
+      const dist = Math.hypot(dx, dy) || 0.00001;
+      const nx = dx / dist;
+      const ny = dy / dist;
+      const allowed = wheelRadiusPx - CONFIG.ballRadiusPx;
+
+      if (dist > allowed) {
+        // Push back to boundary
+        const penetration = dist - allowed;
+        ball.x -= nx * penetration;
+        ball.y -= ny * penetration;
+
+        // Velocity components
+        const vNormal = ball.vx * nx + ball.vy * ny; // outward +
+        const tx = -ny; // tangential unit (CCW)
+        const ty = nx;
+        const vTangential = ball.vx * tx + ball.vy * ty;
+
+        // Reflect/dampen outward normal component (bounce inward)
+        let vN = vNormal;
+        if (vN > 0) {
+          vN = -vN * CONFIG.wallRestitution;
+        }
+
+        // Contact friction: drive relative tangential speed toward wheel surface speed
+        const surfaceSpeed = wheelOmega * allowed; // px/s in +t direction
+        // Coulomb friction model at contact
+        // Slip speed at contact: s = v_t - surfaceSpeed - ballOmega * R
+        const slip = vTangential - surfaceSpeed - ballOmega * allowed;
+
+        // Estimate normal force magnitude N ≈ m * (v_t^2/R + max(0, g * ny))
+        const N = Math.max(0, (vTangential * vTangential) / Math.max(1, allowed) + Math.max(0, g * ny));
+        const JmaxStatic = CONFIG.muStatic * N * dt;
+        const JmaxKinetic = CONFIG.muKinetic * N * dt;
+
+        // Static solution impulse to enforce no slip: J_s = -s / 3 (for solid disk I=1/2 m r^2, m=1)
+        let Jt = 0;
+        const J_static = -slip / 3;
+        if (Math.abs(J_static) <= JmaxStatic) {
+          Jt = J_static;
+        } else {
+          Jt = -Math.sign(slip) * JmaxKinetic;
+        }
+
+        const vT = vTangential + Jt;
+
+        // Recompose linear velocity from normal+tangent
+        ball.vx = vN * nx + vT * tx;
+        ball.vy = vN * ny + vT * ty;
+
+        // Additional inward radial acceleration during contact (inward = -normal)
+        const inwardAccel = CONFIG.inwardRadialAccel * CONFIG.pixelsPerMeter;
+        ball.vx += -nx * inwardAccel * dt;
+        ball.vy += -ny * inwardAccel * dt;
+
+        // Update ball rotation from friction impulse: dOmega = -2 * Jt / R (solid disk)
+        const R = Math.max(1, CONFIG.ballRadiusPx);
+        ballOmega += -2 * Jt / R;
+      }
+
+      // Integrate ball rotation
+      ballAngle += ballOmega * dt;
+    }
+
+    function draw() {
+      ctx.save();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw wheel (rotating)
+      ctx.translate(centerX, centerY);
+      ctx.rotate(wheelAngle);
+
+      const outerRadius = wheelRadiusPx + CONFIG.rimThicknessPx;
+      const innerRadius = wheelRadiusPx;
+
+      // Outer ring
+      drawRing(innerRadius, outerRadius, '#2b3146', '#1b2030');
+
+      // Spokes / ticks
+      drawSpokes(wheelRadiusPx + CONFIG.rimThicknessPx * 0.5, CONFIG.spokeCount);
+
+      // Center hub
+      ctx.beginPath();
+      ctx.arc(0, 0, Math.max(10, CONFIG.rimThicknessPx * 0.4), 0, Math.PI * 2);
+      ctx.fillStyle = '#3a415a';
+      ctx.fill();
+
+      ctx.restore();
+
+      // Draw ball with visible stripes (world frame, ball has its own rotation)
+      ctx.save();
+      ctx.translate(ball.x, ball.y);
+      ctx.rotate(ballAngle);
+      // Body
+      let grd = ctx.createRadialGradient(-CONFIG.ballRadiusPx * 0.4, -CONFIG.ballRadiusPx * 0.4, 2, 0, 0, CONFIG.ballRadiusPx);
+      grd.addColorStop(0, '#ffffff');
+      grd.addColorStop(1, '#c2c8d6');
+      ctx.beginPath();
+      ctx.arc(0, 0, CONFIG.ballRadiusPx, 0, Math.PI * 2);
+      ctx.fillStyle = grd;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+      ctx.lineWidth = 1 * devicePixelRatioValue;
+      ctx.stroke();
+      // Stripes
+      ctx.strokeStyle = '#1f2434';
+      ctx.lineWidth = 3 * devicePixelRatioValue;
+      // Equatorial stripe
+      ctx.beginPath();
+      ctx.moveTo(-CONFIG.ballRadiusPx, 0);
+      ctx.lineTo(CONFIG.ballRadiusPx, 0);
+      ctx.stroke();
+      // Meridional stripe
+      ctx.beginPath();
+      ctx.moveTo(0, -CONFIG.ballRadiusPx);
+      ctx.lineTo(0, CONFIG.ballRadiusPx);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawRing(innerR, outerR, color1, color2) {
+      const ringGradient = ctx.createRadialGradient(0, 0, innerR, 0, 0, outerR);
+      ringGradient.addColorStop(0, color1);
+      ringGradient.addColorStop(1, color2);
+      ctx.beginPath();
+      ctx.arc(0, 0, outerR, 0, Math.PI * 2);
+      ctx.arc(0, 0, innerR, 0, Math.PI * 2, true);
+      ctx.fillStyle = ringGradient;
+      ctx.fill('evenodd');
+    }
+
+    function drawSpokes(radius, count) {
+      const step = (Math.PI * 2) / count;
+      ctx.save();
+      for (let i = 0; i < count; i++) {
+        // Alternating colored radial stripes on the rim to visualize rotation
+        const a0 = i * step;
+        const a1 = (i + 1) * step;
+        const inner = wheelRadiusPx;
+        const outer = wheelRadiusPx + CONFIG.rimThicknessPx;
+        ctx.beginPath();
+        // Outer arc segment
+        ctx.arc(0, 0, outer, a0, a1);
+        // Inner arc back
+        ctx.arc(0, 0, inner, a1, a0, true);
+        ctx.closePath();
+        ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.25)';
+        ctx.fill();
+      }
+      // Optional thin spokes over stripes
+      ctx.rotate(0);
+      for (let i = 0; i < count; i++) {
+        ctx.rotate(step);
+        ctx.beginPath();
+        ctx.moveTo(radius * 0.6, 0);
+        ctx.lineTo(radius * 0.98, 0);
+        ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+        ctx.lineWidth = 1 * devicePixelRatioValue;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Initialize
+    resize();
+    requestAnimationFrame((t) => {
+      lastTimestamp = t;
+      requestAnimationFrame(step);
+    });
+  </script>
 </body>
 </html>
 

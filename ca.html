@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CAP Visual Simulator</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #121a2b;
+      --panel-2: #0f1626;
+      --text: #e6eefc;
+      --muted: #9bb0d3;
+      --accent: #6aa9ff;
+      --good: #3ac17e;
+      --warn: #ffb020;
+      --bad: #ff6b6b;
+      --line: #314061;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial;
+    }
+    .app {
+      max-width: 1100px;
+      margin: 24px auto;
+      padding: 0 16px 48px;
+    }
+    h1 {
+      font-size: 24px;
+      margin: 0 0 8px 0;
+    }
+    .subtitle {
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 16px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid #1e2a44;
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .controls label, .controls legend {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    fieldset {
+      border: 1px dashed #233153;
+      border-radius: 8px;
+      margin: 0 0 12px 0;
+      padding: 10px 12px 12px 12px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin: 8px 0;
+    }
+    .btn {
+      background: #1a2540;
+      border: 1px solid #2a3a63;
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn:hover { background: #21305a; }
+    .btn.bad { border-color: #5b2030; background: #2a1320; color: #ffd3d3; }
+    .btn.good { border-color: #1f5b3b; background: #132a20; color: #d8ffe9; }
+    .btn.warn { border-color: #5b4a1f; background: #2a2313; color: #ffecc7; }
+    select, input[type="text"] {
+      background: var(--panel-2);
+      border: 1px solid #243358;
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 8px;
+      outline: none;
+    }
+    .canvas {
+      position: relative;
+      height: 440px;
+      background: linear-gradient(180deg, #0f1626 0%, #0c1422 100%);
+      border: 1px solid #1e2a44;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    svg.links {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    .nodes {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      padding: 30px;
+    }
+    .node {
+      align-self: center;
+      justify-self: center;
+      width: 200px;
+      background: #141f34;
+      border: 1px solid #223054;
+      border-radius: 12px;
+      padding: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+    }
+    .node header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid #2a3a63;
+      background: #1a2540;
+      color: var(--muted);
+    }
+    .leader .badge { background: #163c2a; border-color: #1d5a3e; color: #c6ffe1; }
+    .kv { display: grid; grid-template-columns: 90px 1fr; gap: 6px; font-size: 13px; color: var(--muted); }
+    .kv span.value { color: var(--text); font-weight: 600; }
+    .legend { display: flex; gap: 14px; align-items: center; font-size: 12px; color: var(--muted); margin-top: 10px; }
+    .dot { width: 10px; height: 10px; border-radius: 999px; display: inline-block; margin-right: 6px; }
+    .dot.good { background: var(--good); }
+    .dot.bad { background: var(--bad); }
+    .dot.warn { background: var(--warn); }
+    .log { height: 180px; overflow: auto; background: var(--panel-2); border: 1px solid #223054; border-radius: 8px; padding: 8px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .log .info { color: #c8e1ff; }
+    .log .ok { color: #b6ffd2; }
+    .log .err { color: #ffc1c1; }
+    .grid-help { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  </style>
+  <script>
+    // --- Simulation core (browser-friendly) ---
+    class LogicalClock {
+      constructor() { this.time = 0; }
+      tick() { this.time += 1; return this.time; }
+      now() { return this.time; }
+    }
+    class NodeReplica {
+      constructor(id, clock) {
+        this.id = id; this.clock = clock; this.value = null; this.version = 0;
+      }
+      write(value) {
+        const ts = this.clock.tick();
+        this.value = value; this.version = ts;
+        return { value, version: ts, nodeId: this.id };
+      }
+      read() { return { value: this.value, version: this.version, nodeId: this.id }; }
+      applyUpdate(update) {
+        if (!update) return;
+        if (update.version > this.version) { this.value = update.value; this.version = update.version; }
+      }
+    }
+    class Network {
+      constructor() { this.allowed = new Map(); this.partitioned = false; }
+      connect(nodes) { nodes.forEach(n => this.allowed.set(n.id, new Set(nodes.map(m => m.id)))); }
+      createPartition(groupA, groupB) {
+        this.partitioned = true;
+        const A = new Set(groupA), B = new Set(groupB);
+        for (const [id, set] of this.allowed.entries()) {
+          set.clear();
+          if (A.has(id)) groupA.forEach(x => set.add(x));
+          else if (B.has(id)) groupB.forEach(x => set.add(x));
+          else set.add(id);
+        }
+      }
+      heal() {
+        this.partitioned = false;
+        const ids = Array.from(this.allowed.keys());
+        for (const [, set] of this.allowed) { set.clear(); ids.forEach(x => set.add(x)); }
+      }
+      canCommunicate(fromId, toId) { return this.allowed.get(fromId)?.has(toId) === true; }
+    }
+    class ClusterCP {
+      constructor(nodes, network) { this.nodes = nodes; this.network = network; this.leaderId = nodes[0].id; }
+      get leader() { return this.nodes.find(n => n.id === this.leaderId); }
+      write(value, fromNodeId) {
+        if (!this.network.canCommunicate(fromNodeId, this.leaderId)) {
+          return { ok: false, reason: 'Partition prevents contacting leader' };
+        }
+        const update = this.leader.write(value);
+        for (const node of this.nodes) {
+          if (this.network.canCommunicate(this.leaderId, node.id)) node.applyUpdate(update);
+          else return { ok: false, reason: `Cannot replicate to ${node.id} due to partition` };
+        }
+        return { ok: true, update };
+      }
+      read(fromNodeId) {
+        if (!this.network.canCommunicate(fromNodeId, this.leaderId)) {
+          return { ok: false, reason: 'Partition prevents strong read from leader' };
+        }
+        const r = this.leader.read();
+        return { ok: true, ...r };
+      }
+    }
+    class ClusterAP {
+      constructor(nodes, network) { this.nodes = nodes; this.network = network; }
+      write(value, fromNodeId) {
+        const node = this.nodes.find(n => n.id === fromNodeId);
+        if (!node) return { ok: false, reason: 'Node not found' };
+        const update = node.write(value);
+        for (const other of this.nodes) {
+          if (other.id !== node.id && this.network.canCommunicate(node.id, other.id)) other.applyUpdate(update);
+        }
+        return { ok: true, update };
+      }
+      read(fromNodeId) {
+        const node = this.nodes.find(n => n.id === fromNodeId);
+        if (!node) return { ok: false, reason: 'Node not found' };
+        return { ok: true, ...node.read() };
+      }
+      reconcile() {
+        let maxUpdate = null;
+        for (const n of this.nodes) { const r = n.read(); if (!maxUpdate || r.version > maxUpdate.version) maxUpdate = r; }
+        for (const n of this.nodes) n.applyUpdate(maxUpdate);
+        return maxUpdate;
+      }
+    }
+    function makeCluster(mode) {
+      const clock = new LogicalClock();
+      const nodes = [new NodeReplica('A', clock), new NodeReplica('B', clock), new NodeReplica('C', clock)];
+      const network = new Network(); network.connect(nodes);
+      return { nodes, network, cluster: mode === 'CP' ? new ClusterCP(nodes, network) : new ClusterAP(nodes, network) };
+    }
+  </script>
+</head>
+<body>
+  <div class="app">
+    <h1>CAP Visual Simulator</h1>
+    <div class="subtitle">Toggle between <b>CP</b> (Consistency + Partition tolerance) and <b>AP</b> (Availability + Partition tolerance). Create a partition, perform writes, and observe behavior.</div>
+
+    <div class="layout">
+      <div class="panel controls">
+        <fieldset>
+          <legend>Guide</legend>
+          <div class="grid-help">
+            <b>CAP</b>: In a partition, you can choose at most two of Consistency (C), Availability (A), and Partition tolerance (P).
+            <br/>- <b>CP</b>: Prefer consistency; some requests may be rejected during partitions.
+            <br/>- <b>AP</b>: Prefer availability; accept writes on both sides; reconcile later (here: last-write-wins).
+            <br/><br/><b>Consistency models</b>:
+            <br/>- <b>Strong</b> (CP): reads go to the leader; always the latest value if reachable.
+            <br/>- <b>Eventual</b> (AP): replicas converge over time; reads may be stale during partitions.
+            <br/>- <b>Read-Your-Writes</b>: a client never reads older than their last write.
+            <br/>- <b>Monotonic Reads</b>: a client never goes back to older versions after seeing newer.
+            <br/><br/><b>How to use</b>:
+            <br/>1) Pick mode (CP/AP). 2) Optionally enable session guarantees. 3) Create a partition. 4) Perform writes/reads from different nodes. 5) Heal and observe convergence.
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Mode</legend>
+          <div class="row">
+            <label><input type="radio" name="mode" value="CP" checked /> CP (strong consistency)</label>
+            <label><input type="radio" name="mode" value="AP" /> AP (eventual consistency)</label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Client & Session</legend>
+          <div class="row">
+            <label>Client</label>
+            <select id="client-id">
+              <option>Client 1</option>
+              <option>Client 2</option>
+            </select>
+            <label><input type="checkbox" id="cb-ryw" /> Read-Your-Writes</label>
+            <label><input type="checkbox" id="cb-mr" /> Monotonic Reads</label>
+          </div>
+          <div id="client-state" class="grid-help"></div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Network</legend>
+          <div class="row">
+            <button id="btn-partition" class="btn warn">Partition: A | B,C</button>
+            <button id="btn-heal" class="btn good">Heal</button>
+          </div>
+          <div class="legend">
+            <span><span class="dot good"></span>connected</span>
+            <span><span class="dot bad"></span>cut by partition</span>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Operations</legend>
+          <div class="row">
+            <label>From</label>
+            <select id="op-node">
+              <option>A</option>
+              <option>B</option>
+              <option>C</option>
+            </select>
+            <label>Value</label>
+            <input id="op-value" type="text" placeholder="e.g., X" />
+            <button id="btn-write" class="btn">Write</button>
+            <button id="btn-read" class="btn">Read</button>
+          </div>
+          <div class="row">
+            <button id="btn-demo-cp" class="btn">Demo CP partition</button>
+            <button id="btn-demo-ap" class="btn">Demo AP partition</button>
+          </div>
+          <div class="grid-help">In CP, leader is node A. During partition, writes requiring replication may fail. In AP, both sides accept writes; reconcile after heal.</div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Log</legend>
+          <div id="log" class="log"></div>
+        </fieldset>
+      </div>
+
+      <div class="panel">
+        <div class="canvas" id="canvas">
+          <svg class="links" id="links" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+          <div class="nodes">
+            <div class="node leader" id="node-A">
+              <header>
+                <div><b>Node A</b></div>
+                <div class="badge">Leader</div>
+              </header>
+              <div class="kv"><span>Value</span> <span class="value" data-value>A</span></div>
+              <div class="kv"><span>Version</span> <span class="value" data-version>0</span></div>
+            </div>
+            <div class="node" id="node-B">
+              <header><div><b>Node B</b></div><div class="badge">Replica</div></header>
+              <div class="kv"><span>Value</span> <span class="value" data-value>B</span></div>
+              <div class="kv"><span>Version</span> <span class="value" data-version>0</span></div>
+            </div>
+            <div class="node" id="node-C" style="grid-column: 1 / span 2; justify-self: center;">
+              <header><div><b>Node C</b></div><div class="badge">Replica</div></header>
+              <div class="kv"><span>Value</span> <span class="value" data-value>C</span></div>
+              <div class="kv"><span>Version</span> <span class="value" data-version>0</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- UI logic ---
+    const els = {
+      mode: Array.from(document.querySelectorAll('input[name="mode"]')),
+      btnPartition: document.getElementById('btn-partition'),
+      btnHeal: document.getElementById('btn-heal'),
+      btnWrite: document.getElementById('btn-write'),
+      btnRead: document.getElementById('btn-read'),
+      btnDemoCP: document.getElementById('btn-demo-cp'),
+      btnDemoAP: document.getElementById('btn-demo-ap'),
+      opNode: document.getElementById('op-node'),
+      opValue: document.getElementById('op-value'),
+      log: document.getElementById('log'),
+      canvas: document.getElementById('canvas'),
+      links: document.getElementById('links'),
+      nodeA: document.getElementById('node-A'),
+      nodeB: document.getElementById('node-B'),
+      nodeC: document.getElementById('node-C'),
+      clientId: document.getElementById('client-id'),
+      cbRYW: document.getElementById('cb-ryw'),
+      cbMR: document.getElementById('cb-mr'),
+      clientState: document.getElementById('client-state'),
+    };
+
+    function logLine(type, text, obj) {
+      const div = document.createElement('div');
+      div.className = type;
+      const time = new Date().toLocaleTimeString();
+      div.textContent = `[${time}] ${text}`;
+      if (obj !== undefined) {
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(obj, null, 2);
+        div.appendChild(pre);
+      }
+      els.log.appendChild(div);
+      els.log.scrollTop = els.log.scrollHeight;
+    }
+
+    let mode = 'CP';
+    let { nodes, network, cluster } = makeCluster(mode);
+    const clients = ['Client 1','Client 2'];
+    const clientSessions = new Map(clients.map(id => [id, { lastWriteVersion: 0, lastReadVersion: 0 }]))
+
+    function nodeEl(id) { return ({ A: els.nodeA, B: els.nodeB, C: els.nodeC })[id]; }
+
+    function updateNodeCards() {
+      const map = new Map(nodes.map(n => [n.id, n]));
+      for (const id of ['A','B','C']) {
+        const el = nodeEl(id);
+        const n = map.get(id);
+        el.querySelector('[data-value]').textContent = String(n.value ?? 'null');
+        el.querySelector('[data-version]').textContent = String(n.version);
+      }
+      // leader badge only for CP
+      els.nodeA.classList.toggle('leader', mode === 'CP');
+    }
+
+    function linkData() {
+      // Build three undirected edges: A-B, A-C, B-C
+      const rect = els.canvas.getBoundingClientRect();
+      function centerOf(el) { const r = el.getBoundingClientRect(); return { x: r.left + r.width/2 - rect.left, y: r.top + r.height/2 - rect.top }; }
+      const A = centerOf(els.nodeA), B = centerOf(els.nodeB), C = centerOf(els.nodeC);
+      return [
+        { id: 'A-B', a: A, b: B, ok: network.canCommunicate('A','B') && network.canCommunicate('B','A') },
+        { id: 'A-C', a: A, b: C, ok: network.canCommunicate('A','C') && network.canCommunicate('C','A') },
+        { id: 'B-C', a: B, b: C, ok: network.canCommunicate('B','C') && network.canCommunicate('C','B') },
+      ];
+    }
+
+    function drawLinks() {
+      const w = els.canvas.clientWidth, h = els.canvas.clientHeight;
+      els.links.setAttribute('viewBox', `0 0 ${w} ${h}`);
+      const edges = linkData();
+      els.links.innerHTML = edges.map(e => {
+        const color = e.ok ? 'var(--good)' : 'var(--bad)';
+        const dash = e.ok ? '' : 'stroke-dasharray="8 6"';
+        return `<line x1="${e.a.x}" y1="${e.a.y}" x2="${e.b.x}" y2="${e.b.y}" stroke="${color}" stroke-width="3" ${dash} />`;
+      }).join('');
+    }
+
+    function updateUI() { updateNodeCards(); drawLinks(); }
+    window.addEventListener('resize', () => requestAnimationFrame(updateUI));
+
+    function getSelectedClientId() { return els.clientId.value; }
+    function updateClientStateUI() {
+      const id = getSelectedClientId();
+      const s = clientSessions.get(id);
+      els.clientState.textContent = `${id}: lastWriteVersion=${s.lastWriteVersion} · lastReadVersion=${s.lastReadVersion}`;
+    }
+    els.clientId.addEventListener('change', updateClientStateUI);
+
+    // --- Event handlers ---
+    els.mode.forEach(r => r.addEventListener('change', () => {
+      if (!r.checked) return;
+      mode = r.value;
+      const snapshot = nodes.map(n => ({ id: n.id, value: n.value, version: n.version }));
+      ({ nodes, network, cluster } = makeCluster(mode));
+      // restore snapshot onto new cluster (for smoother switching)
+      for (const s of snapshot) { const n = nodes.find(x => x.id === s.id); if (n) { n.value = s.value; n.version = s.version; } }
+      network.heal();
+      logLine('info', `Switched mode to ${mode}`);
+      updateUI();
+    }));
+
+    els.btnPartition.addEventListener('click', () => {
+      network.createPartition(['A'], ['B','C']);
+      logLine('warn', 'Partition created: {A} | {B,C}');
+      updateUI();
+    });
+    els.btnHeal.addEventListener('click', () => {
+      network.heal();
+      logLine('ok', 'Network healed');
+      if (mode === 'AP') {
+        const merged = cluster.reconcile();
+        logLine('ok', 'AP reconcile (last-write-wins)', merged);
+      }
+      updateUI();
+    });
+
+    els.btnWrite.addEventListener('click', () => {
+      const from = els.opNode.value;
+      const val = els.opValue.value || randomValue();
+      const res = cluster.write(val, from);
+      if (res.ok) {
+        const cid = getSelectedClientId();
+        const s = clientSessions.get(cid);
+        const ver = res.update?.version ?? 0;
+        s.lastWriteVersion = Math.max(s.lastWriteVersion, ver);
+        s.lastReadVersion = Math.max(s.lastReadVersion, ver);
+        logLine('ok', `${mode} write '${val}' from ${from} accepted`, res.update);
+        updateClientStateUI();
+      }
+      else logLine('err', `${mode} write '${val}' from ${from} rejected: ${res.reason}`);
+      updateUI();
+    });
+    els.btnRead.addEventListener('click', () => {
+      const from = els.opNode.value;
+      const cid = getSelectedClientId();
+      const enforceRYW = els.cbRYW.checked;
+      const enforceMR = els.cbMR.checked;
+      const res = performSessionAwareRead(from, cid, enforceRYW, enforceMR);
+      if (res.ok) logLine('ok', `${mode} read from ${from} (served by ${res.nodeId}): value=${res.value} ts=${res.version}`);
+      else logLine('err', `${mode} read from ${from} blocked: ${res.reason}`);
+      updateUI();
+      updateClientStateUI();
+    });
+
+    els.btnDemoCP.addEventListener('click', async () => {
+      setMode('CP');
+      network.heal(); updateUI();
+      logLine('info', 'Demo: CP partition flow');
+      await sleep(300);
+      let r = cluster.write('X', 'B');
+      logLine(r.ok ? 'ok' : 'err', 'Write X from B', r);
+      updateUI();
+      await sleep(300);
+      network.createPartition(['A'], ['B','C']); updateUI();
+      logLine('warn', 'Partition {A} | {B,C}');
+      await sleep(300);
+      r = cluster.write('Y', 'A');
+      logLine(r.ok ? 'ok' : 'err', 'Try write Y from A (isolated)', r);
+      updateUI();
+      await sleep(300);
+      network.heal(); updateUI();
+      logLine('ok', 'Heal');
+      await sleep(300);
+      r = cluster.write('Z', 'C');
+      logLine(r.ok ? 'ok' : 'err', 'Write Z from C', r);
+      updateUI();
+    });
+
+    els.btnDemoAP.addEventListener('click', async () => {
+      setMode('AP');
+      network.heal(); updateUI();
+      logLine('info', 'Demo: AP partition flow');
+      await sleep(300);
+      let r = cluster.write('X', 'A');
+      logLine(r.ok ? 'ok' : 'err', 'Write X from A', r);
+      updateUI();
+      await sleep(300);
+      network.createPartition(['A'], ['B','C']); updateUI();
+      logLine('warn', 'Partition {A} | {B,C}');
+      await sleep(300);
+      r = cluster.write('Y', 'A');
+      logLine(r.ok ? 'ok' : 'err', 'Write Y from A (accepted on A side)', r);
+      updateUI();
+      await sleep(300);
+      r = cluster.write('W', 'B');
+      logLine(r.ok ? 'ok' : 'err', 'Write W from B (accepted on B side)', r);
+      updateUI();
+      await sleep(300);
+      network.heal(); updateUI();
+      logLine('ok', 'Heal');
+      await sleep(300);
+      const merged = cluster.reconcile();
+      logLine('ok', 'Reconcile (last-write-wins)', merged);
+      updateUI();
+    });
+
+    function setMode(next) {
+      mode = next; els.mode.forEach(r => r.checked = (r.value === next));
+      ({ nodes, network, cluster } = makeCluster(mode));
+    }
+    function randomValue() {
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      return alphabet[Math.floor(Math.random() * alphabet.length)];
+    }
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    function performSessionAwareRead(fromNodeId, clientId, ryw, mr) {
+      const session = clientSessions.get(clientId);
+      const desiredMin = Math.max(ryw ? session.lastWriteVersion : 0, mr ? session.lastReadVersion : 0);
+      // Try default read first
+      let base = cluster.read(fromNodeId);
+      if (base.ok && base.version >= desiredMin) {
+        session.lastReadVersion = Math.max(session.lastReadVersion, base.version);
+        return { ok: true, ...base, nodeId: mode === 'CP' ? 'A' : fromNodeId };
+      }
+      // Attempt routing to a reachable node with sufficient version
+      const candidateIds = mode === 'CP' ? ['A'] : ['A','B','C'];
+      let best = null;
+      for (const id of candidateIds) {
+        if (!network.canCommunicate(fromNodeId, id)) continue;
+        const n = nodes.find(x => x.id === id);
+        if (n && n.version >= desiredMin) {
+          if (!best || n.version > best.version) best = { value: n.value, version: n.version, nodeId: id };
+        }
+      }
+      if (best) {
+        session.lastReadVersion = Math.max(session.lastReadVersion, best.version);
+        return { ok: true, ...best };
+      }
+      const reason = desiredMin === 0 ? (base.reason || 'Unavailable') : 'Cannot satisfy session guarantee under current partition';
+      return { ok: false, reason };
+    }
+
+    // init
+    updateUI();
+    updateClientStateUI();
+  </script>
+</body>
+<!--
+What to look for:
+ - CP: During partition, writes that cannot replicate are rejected; reads route to leader and may fail from isolated side.
+ - AP: During partition, each side accepts writes; after heal, a last-write-wins merge is applied.
+-->
+</html>
+
