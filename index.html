@@ -54,12 +54,9 @@
       gravityMeters: 5.0,             // m/s^2 downward (screen +y)
       airDragPerSecond: 0.10,         // Fractional velocity loss per second (air)
       wallRestitution: 0.25,          // Bounciness on the rim (0..1)
-      // Friction model (Coulomb):
-      muStatic: 0.45,                 // Static friction coefficient
-      muKinetic: 0.35,                // Kinetic friction coefficient
+      wallFriction: 6.0,              // Tangential contact friction gain (drives v toward wheel surface speed)
       inwardRadialAccel: 1.8,         // Extra inward acceleration (m/s^2) while in contact
       wheelAngularFriction: 0.25,     // Fractional omega loss per second
-      ballAngularFriction: 2.0,       // Rotational damping for ball (1/s)
       rimThicknessPx: 24,             // Visual thickness
       ballRadiusPx: 10,               // Ball size
       spokeCount: 36,                 // Decorative spokes
@@ -77,10 +74,6 @@
     let wheelRadiusPx = 0;            // Inner radius where ball collides
     let wheelAngle = 0;               // For rendering
     let wheelOmega = 0.4;             // rad/s (slower default)
-
-    // Ball rotation state (for visible stripes)
-    let ballAngle = 0;                // radians
-    let ballOmega = 0;                // rad/s
 
     const ball = {
       x: 0,
@@ -166,10 +159,6 @@
       ball.x += ball.vx * dt;
       ball.y += ball.vy * dt;
 
-      // Ball rotational damping
-      const ballSpinK = Math.max(0, 1 - CONFIG.ballAngularFriction * dt);
-      ballOmega *= ballSpinK;
-
       // Wheel spin friction
       const omegaK = Math.max(0, 1 - CONFIG.wheelAngularFriction * dt);
       wheelOmega *= omegaK;
@@ -203,27 +192,11 @@
 
         // Contact friction: drive relative tangential speed toward wheel surface speed
         const surfaceSpeed = wheelOmega * allowed; // px/s in +t direction
-        // Coulomb friction model at contact
-        // Slip speed at contact: s = v_t - surfaceSpeed - ballOmega * R
-        const slip = vTangential - surfaceSpeed - ballOmega * allowed;
+        const relativeTangential = vTangential - surfaceSpeed;
+        const frictionImpulse = -relativeTangential * CONFIG.wallFriction * dt;
+        const vT = vTangential + frictionImpulse;
 
-        // Estimate normal force magnitude N ≈ m * (v_t^2/R + max(0, g * ny))
-        const N = Math.max(0, (vTangential * vTangential) / Math.max(1, allowed) + Math.max(0, g * ny));
-        const JmaxStatic = CONFIG.muStatic * N * dt;
-        const JmaxKinetic = CONFIG.muKinetic * N * dt;
-
-        // Static solution impulse to enforce no slip: J_s = -s / 3 (for solid disk I=1/2 m r^2, m=1)
-        let Jt = 0;
-        const J_static = -slip / 3;
-        if (Math.abs(J_static) <= JmaxStatic) {
-          Jt = J_static;
-        } else {
-          Jt = -Math.sign(slip) * JmaxKinetic;
-        }
-
-        const vT = vTangential + Jt;
-
-        // Recompose linear velocity from normal+tangent
+        // Recompose velocity from normal+tangent
         ball.vx = vN * nx + vT * tx;
         ball.vy = vN * ny + vT * ty;
 
@@ -231,14 +204,7 @@
         const inwardAccel = CONFIG.inwardRadialAccel * CONFIG.pixelsPerMeter;
         ball.vx += -nx * inwardAccel * dt;
         ball.vy += -ny * inwardAccel * dt;
-
-        // Update ball rotation from friction impulse: dOmega = -2 * Jt / R (solid disk)
-        const R = Math.max(1, CONFIG.ballRadiusPx);
-        ballOmega += -2 * Jt / R;
       }
-
-      // Integrate ball rotation
-      ballAngle += ballOmega * dt;
     }
 
     function draw() {
@@ -266,35 +232,17 @@
 
       ctx.restore();
 
-      // Draw ball with visible stripes (world frame, ball has its own rotation)
-      ctx.save();
-      ctx.translate(ball.x, ball.y);
-      ctx.rotate(ballAngle);
-      // Body
-      let grd = ctx.createRadialGradient(-CONFIG.ballRadiusPx * 0.4, -CONFIG.ballRadiusPx * 0.4, 2, 0, 0, CONFIG.ballRadiusPx);
+      // Draw ball (world frame, not rotating with wheel)
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, CONFIG.ballRadiusPx, 0, Math.PI * 2);
+      const grd = ctx.createRadialGradient(ball.x - CONFIG.ballRadiusPx * 0.4, ball.y - CONFIG.ballRadiusPx * 0.4, 2, ball.x, ball.y, CONFIG.ballRadiusPx);
       grd.addColorStop(0, '#ffffff');
       grd.addColorStop(1, '#c2c8d6');
-      ctx.beginPath();
-      ctx.arc(0, 0, CONFIG.ballRadiusPx, 0, Math.PI * 2);
       ctx.fillStyle = grd;
       ctx.fill();
       ctx.strokeStyle = 'rgba(0,0,0,0.25)';
       ctx.lineWidth = 1 * devicePixelRatioValue;
       ctx.stroke();
-      // Stripes
-      ctx.strokeStyle = '#1f2434';
-      ctx.lineWidth = 3 * devicePixelRatioValue;
-      // Equatorial stripe
-      ctx.beginPath();
-      ctx.moveTo(-CONFIG.ballRadiusPx, 0);
-      ctx.lineTo(CONFIG.ballRadiusPx, 0);
-      ctx.stroke();
-      // Meridional stripe
-      ctx.beginPath();
-      ctx.moveTo(0, -CONFIG.ballRadiusPx);
-      ctx.lineTo(0, CONFIG.ballRadiusPx);
-      ctx.stroke();
-      ctx.restore();
     }
 
     function drawRing(innerR, outerR, color1, color2) {
@@ -312,29 +260,12 @@
       const step = (Math.PI * 2) / count;
       ctx.save();
       for (let i = 0; i < count; i++) {
-        // Alternating colored radial stripes on the rim to visualize rotation
-        const a0 = i * step;
-        const a1 = (i + 1) * step;
-        const inner = wheelRadiusPx;
-        const outer = wheelRadiusPx + CONFIG.rimThicknessPx;
-        ctx.beginPath();
-        // Outer arc segment
-        ctx.arc(0, 0, outer, a0, a1);
-        // Inner arc back
-        ctx.arc(0, 0, inner, a1, a0, true);
-        ctx.closePath();
-        ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.25)';
-        ctx.fill();
-      }
-      // Optional thin spokes over stripes
-      ctx.rotate(0);
-      for (let i = 0; i < count; i++) {
         ctx.rotate(step);
         ctx.beginPath();
         ctx.moveTo(radius * 0.6, 0);
         ctx.lineTo(radius * 0.98, 0);
-        ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-        ctx.lineWidth = 1 * devicePixelRatioValue;
+        ctx.strokeStyle = i % 2 === 0 ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.22)';
+        ctx.lineWidth = 2 * devicePixelRatioValue;
         ctx.stroke();
       }
       ctx.restore();
