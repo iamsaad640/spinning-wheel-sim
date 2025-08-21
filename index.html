@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spinning Wheel Physics Simulation</title>
+    <meta http-equiv="refresh" content="0; url=wheel.html">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1115;
+            color: #eaeef7;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+        }
+        .container {
+            max-width: 600px;
+            padding: 2rem;
+        }
+        h1 {
+            color: #ffffff;
+            margin-bottom: 1rem;
+        }
+        p {
+            color: #aab3c5;
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
+        }
+        .btn {
+            display: inline-block;
+            background: #3a415a;
+            color: #ffffff;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
+        .btn:hover {
+            background: #4a526a;
+        }
+        .loading {
+            color: #4a526a;
+            font-size: 0.9rem;
+            margin-top: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎡 Spinning Wheel Physics Simulation</h1>
+        <p>Redirecting you to the interactive simulation...</p>
+        <p>If you're not redirected automatically, click the button below:</p>
+        <a href="wheel.html" class="btn">Launch Simulation</a>
+        <div class="loading">Loading physics engine...</div>
+    </div>
+    
+    <script>
+        // Fallback redirect after 2 seconds
+        setTimeout(() => {
+            window.location.href = 'wheel.html';
+        }, 2000);
+    </script>
+</body>
+</html>
+
